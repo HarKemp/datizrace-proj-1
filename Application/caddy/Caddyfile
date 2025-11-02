@@ -1,4 +1,4 @@
-studijas.lat {
+test.studijas.lat {
 	encode gzip
 	reverse_proxy web:80
 }
