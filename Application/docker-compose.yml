@@ -2,24 +2,32 @@ volumes:
   caddy_data:
   caddy_config:
 
-#TODO Create a docker network
+networks:
+  datiz:
+    name: datiz
+    driver: bridge
+  # Don't change this
+  edge_net:
+    external: true
 
 services:
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      datiz: {}
+      # Don't change this
+      edge_net:
+        ipv4_address: 10.10.0.20
 
   web:
     image: nginx:1.29-alpine
     restart: unless-stopped
     volumes:
       - ./web:/usr/share/nginx/html:ro
-#    expose:
-#      - "80"
+    networks:
+      datiz: {}

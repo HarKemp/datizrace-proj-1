@@ -22,11 +22,11 @@ jobs:
           script: |
             set -e
             echo "Updating repo ..."
-            cd ~/GitRepositories/actions_template
+            cd ~/GitRepositories/datizrace-proj-1
             git pull origin main
 
             echo "Restarting docker containers ..."
-            cd ~/GitRepositories/actions_template/Application
+            cd ~/GitRepositories/datizrace-proj-1/Application
             docker compose down
             docker compose up -d --remove-orphans
 
