@@ -1,4 +1,9 @@
-test.datiz.studijas.lat {
+mlflow.datiz.studijas.lat {
 	encode gzip
-	reverse_proxy web:80
+	reverse_proxy mlflow:5000
+}
+
+streamlit.datiz.studijas.lat {
+	encode gzip
+	reverse_proxy ml-app:8501
 }

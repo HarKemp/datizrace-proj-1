@@ -3,11 +3,18 @@ name: datizrace
 volumes:
   caddy_data:
   caddy_config:
+  mlflow-store:
+  mlflow-artifacts:
 
 networks:
   datiz:
     name: datiz
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.16.238.0/24
+
   # Don't change this
   edge_net:
     external: true
@@ -26,10 +33,38 @@ services:
       edge_net:
         ipv4_address: 10.10.0.20
 
-  web:
-    image: nginx:1.29-alpine
-    restart: unless-stopped
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.4.0 # Oficiālais repozitorijs ar attiecīgo versiju
+    restart: unless-stopped # Konteineris tiks palaist kamēr nav prtraukts
+    environment:
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
+    command: mlflow server --host 172.16.238.23 --port 5000 --backend-store-uri sqlite:////mlflow/store/mlflow.db --artifacts-destination /mlflow/artifacts  # Komanda servera palaišanai attiecīgajā IP adresē un portā
     volumes:
-      - ./web:/usr/share/nginx/html:ro
+      - mlflow-store:/mlflow/store
+      - mlflow-artifacts:/mlflow/artifacts
     networks:
-      datiz: {}
+      datiz:
+        ipv4_address: 172.16.238.23 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
+
+  ml-projekts:
+    build:
+      context: ./ml-projekts
+      dockerfile: Dockerfile
+    image: ml-projekts:latest
+    environment:
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta.Tiek lietota statiskā Docker IP adrese
+    networks:
+      datiz:
+        ipv4_address: 172.16.238.24 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
+
+  ml-app:
+    build:
+      context: ./ml-app
+      dockerfile: Dockerfile
+    image: ml-app:latest
+    environment:
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
+    networks:
+      datiz:
+        ipv4_address: 172.16.238.25 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
+
