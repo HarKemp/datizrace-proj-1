@@ -3,7 +3,12 @@ mlflow.datiz.studijas.lat {
 	reverse_proxy mlflow:5000
 }
 
-streamlit.datiz.studijas.lat {
+smoking.datiz.studijas.lat {
+	encode gzip
+	reverse_proxy ml-app:8501
+}
+
+hotel.datiz.studijas.lat {
 	encode gzip
 	reverse_proxy ml-app:8501
 }

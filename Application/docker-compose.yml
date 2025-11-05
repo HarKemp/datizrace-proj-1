@@ -46,25 +46,47 @@ services:
       datiz:
         ipv4_address: 172.16.238.23 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
 
-  ml-projekts:
+  ml-projekts-1:
     build:
-      context: ./ml-projekts
+      context: ./ml-projekts-1
       dockerfile: Dockerfile
-    image: ml-projekts:latest
+    image: ml-projekts-1:latest
     environment:
       MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta.Tiek lietota statiskā Docker IP adrese
     networks:
       datiz:
         ipv4_address: 172.16.238.24 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
 
-  ml-app:
+  ml-projekts-2:
     build:
-      context: ./ml-app
+      context: ./ml-projekts-2
       dockerfile: Dockerfile
-    image: ml-app:latest
+    image: ml-projekts-2:latest
+    environment:
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta.Tiek lietota statiskā Docker IP adrese
+    networks:
+      datiz:
+        ipv4_address: 172.16.238.27 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
+
+  ml-app-1:
+    build:
+      context: ./ml-app-1
+      dockerfile: Dockerfile
+    image: ml-app-1:latest
     environment:
       MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
     networks:
       datiz:
         ipv4_address: 172.16.238.25 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
+
+  ml-app-2:
+    build:
+      context: ./ml-app-2
+      dockerfile: Dockerfile
+    image: ml-app-2:latest
+    environment:
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
+    networks:
+      datiz:
+        ipv4_address: 172.16.238.26 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
 
