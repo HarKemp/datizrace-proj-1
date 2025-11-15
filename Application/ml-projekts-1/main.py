@@ -53,7 +53,7 @@ for col in categorical_cols:
 dataset['Loan_Status'] = le.fit_transform(dataset['Loan_Status'])
 
 # Datu kopas sadalīšana apmācības un testēšanas kopās.
-# Vispirms atdalam aprakstošus atribūtus un mērķā atribūtu
+# Vispirms atdalam aprakstošus atribūtus un mērķa atribūtu
 X = dataset.drop(columns=['Loan_Status', 'Loan_ID'])
 y = dataset.Loan_Status
 RANDOM_SEED = 6
@@ -80,7 +80,7 @@ grid_forest = GridSearchCV(
         scoring='accuracy',
         verbose=0
     )
-# Palaižam apmācības un novērtēsanas procesu
+# Palaižam apmācības un novērtēšanas procesu
 model_forest = grid_forest.fit(X_train, y_train)
 
 # Pārbaudam vai mūsu eksperiments eksistē un ja ne, tad to izveidojam
@@ -123,7 +123,7 @@ def mlflow_logging(model, X, y, name):
         pred = model.predict(X)
         # Aprēķinam metriku vērtības
         (accuracy, f1, auc) = eval_metrics(y, pred)
-        # Fiksējam žurnālā labākus modeļa parametrus
+        # Fiksējam žurnālā labākos modeļa parametrus
         mlflow.log_params(model.best_params_)
         # Fiksējam žurnālā metriku vērtības
         mlflow.log_metric("Mean CV score", model.best_score_)
