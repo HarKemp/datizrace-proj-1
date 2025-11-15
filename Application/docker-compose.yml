@@ -35,9 +35,9 @@ services:
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.4.0 # Oficiālais repozitorijs ar attiecīgo versiju
-    restart: unless-stopped # Konteineris tiks palaist kamēr nav prtraukts
+    restart: unless-stopped # Konteineris tiks palaists kamēr nav pārtraukts
     environment:
-      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vides mainīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
     command: mlflow server --host 172.16.238.23 --port 5000 --backend-store-uri sqlite:////mlflow/store/mlflow.db --artifacts-destination /mlflow/artifacts  # Komanda servera palaišanai attiecīgajā IP adresē un portā
     volumes:
       - mlflow-store:/mlflow/store
@@ -52,7 +52,7 @@ services:
       dockerfile: Dockerfile
     image: ml-projekts-1:latest
     environment:
-      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vīdes minīgais, lai katru reizi tas nav jāieraksta.Tiek lietota statiskā Docker IP adrese
+      MLFLOW_TRACKING_URI: http://172.16.238.23:5000  # Vides mainīgais, lai katru reizi tas nav jāieraksta. Tiek lietota statiskā Docker IP adrese
     networks:
       datiz:
         ipv4_address: 172.16.238.24 # Definējam zem kura tīkla un ar kādu IP adresi tiks asociēts konteineris
