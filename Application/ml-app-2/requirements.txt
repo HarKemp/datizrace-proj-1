@@ -1,7 +1,8 @@
 streamlit
-uvicorn
-scikit-learn
-pandas 
-mlflow
-Python-IO
+pandas
 numpy
+scikit-learn
+mlflow
+xgboost
+matplotlib
+seaborn

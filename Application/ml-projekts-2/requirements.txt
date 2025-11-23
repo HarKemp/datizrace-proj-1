@@ -1,6 +1,8 @@
-scikit-learn
-numpy
+streamlit
 pandas
+numpy
+scikit-learn
 mlflow
-matplotlib
 xgboost
+matplotlib
+seaborn
