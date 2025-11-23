@@ -1,0 +1,9 @@
+Data/*
+!Data/*.zip
+
+Application/ml-projekts-1/data/*
+Application/ml-projekts-2/data/*
+
+mlflow.datiz.studijas.lat
+
+Apraksts/*

@@ -3,3 +3,5 @@ numpy
 pandas
 mlflow
 matplotlib
+xgboost
+scikit

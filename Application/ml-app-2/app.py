@@ -1,132 +1,147 @@
 import streamlit as st
 import pandas as pd 
 import mlflow.sklearn 
-from sklearn.preprocessing import LabelEncoder
 import numpy as np
 from io import StringIO
+import sys
+import os
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class QuantileClipper(BaseEstimator, TransformerMixin):
+    def __init__(self, lower_q=0.01, upper_q=0.99):
+        self.lower_q = lower_q
+        self.upper_q = upper_q
+
+    def fit(self, X, y=None):
+        X = np.asarray(X)
+        if X.shape[0] > 0:
+            self.lower_ = np.quantile(X, self.lower_q, axis=0)
+            self.upper_ = np.quantile(X, self.upper_q, axis=0)
+        else:
+            self.lower_ = 0
+            self.upper_ = 0
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.clip(X, self.lower_, self.upper_)
+
+# --- Configuration ---
+MLFLOW_TRACKING_URI = "https://mlflow.datiz.studijas.lat"
+MODEL_NAME = "Hotel_Cancellation_Model"
+MODEL_ALIAS = "champion"
 
 st.set_page_config(
-    page_title="Aizdevuma statusa prognozēšanas modelis",
+    page_title="Hotel Booking Cancellation Prediction",
     layout="centered"
 )
 
-# --- Funkcija datu sagatavošanai ---
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    
-    st.info("Notiek datu kopas sagatavošana")
-    
-    dataset = df.copy()
-    
-    # Nosakam skaitliskās kolonnas
-    numerical_cols = dataset.select_dtypes(include=['int64','float64']).columns.tolist()
-    # Nosakam kategoriju kolonnas
-    categorical_cols = dataset.select_dtypes(include=['object']).columns.tolist()
-    # Izņemsim kolonnas, kuras mūs neinteresē
-    categorical_cols.remove('Loan_Status')
-    categorical_cols.remove('Loan_ID')
-
-    # Ar modu aizpildam tukšas vērtības kategoriju kolonnās
-    for col in categorical_cols:
-        dataset[col] = dataset[col].fillna(dataset[col].mode()[0])
-
-    # Ar mediānu aizpildām tukšās vērtības skaitliskajās kolonnās
-    for col in numerical_cols:
-        dataset[col] = dataset[col].fillna(dataset[col].median(skipna=True))
-    
-    #Skaitlisko kolonnu normalizācija un kopējā ienakuma aprēķins
-    dataset['LoanAmount'] = np.log(dataset['LoanAmount']).copy()
-    dataset['TotalIncome'] = dataset['ApplicantIncome'] + dataset['CoapplicantIncome']
-    dataset['TotalIncome'] = np.log(dataset['TotalIncome']).copy()
-
-    # Nevajadzīgo kolonnu nodzēšana
-    dataset = dataset.drop(columns=['ApplicantIncome','CoapplicantIncome'])
-
-    # Kategoriju atribūtu vērtību iekodēšana ar skaitļiem. Tiek pielietots LabelEncoder, kurš to dara automātiski.
-    for col in categorical_cols:
-        le = LabelEncoder()
-        dataset[col] = le.fit_transform(dataset[col])
-
-    dataset = dataset.drop(columns=['Loan_Status', 'Loan_ID'])
-    return dataset
-
-# --- MLflow Model Loading with Caching ---
+# --- MLflow Model Loading ---
 @st.cache_resource
 def load_mlflow_model():
     try:
-        # Full model URI format: models:/<model_name>/<version_alias>
-        MODEL_NAME = "rf_champion"
-        MODEL_ALIAS = "champion"
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         full_uri = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
-        st.info(f"Ielādējam modeli: **{full_uri}**")
+        st.sidebar.info(f"Loading Model: **{MODEL_NAME}** (@{MODEL_ALIAS})")
         
         model = mlflow.sklearn.load_model(full_uri)
-        st.success("Modelis tika veiksmīgi ielādēts.")
+        st.sidebar.success("Model loaded successfully.")
         return model
     except Exception as e:
         st.error(f"Error loading MLflow model: {e}")
-        st.warning("Ensure your MLFLOW_TRACKING_URI is correct and the model 'rf_champion' with alias 'champion' exists.")
-        # Return the placeholder model on failure so the app can still demonstrate the flow
-        return model
+        st.warning("Please ensure the MLflow server is reachable and the 'champion' alias is set.")
+        return None
 
-
-# --- Main Streamlit App Logic ---
+# --- Main App Logic ---
 def main():
-    st.title("Aizdevuma statusa prognozēšanas modelis")
+    st.title("Hotel Booking Cancellation Prediction")
     
-    st.subheader("1. Augšupielādējiet datni ar datiem")
-    st.markdown("Augšupielādējiet datni ar datiem, kur sākuma rinda satur kolonnu sarakstu.")
+    st.subheader("1. Upload Booking Data")
+    st.markdown("Upload a CSV file containing hotel reservation data")
     
-    # Augšupielāde
-    uploaded_file = st.file_uploader(
-        "Izvēlietise CSV datni",
-        type="csv"
-    )
+    # File Upload
+    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
     if uploaded_file is not None:
         try:
-            # 2. Load data into DataFrame
-            st.subheader("2. Datu ielāde")
+            # 2. Load Data
+            st.subheader("2. Data Preview")
+            data_df = pd.read_csv(uploaded_file)
             
-            stringio = StringIO(uploaded_file.getvalue().decode("utf-8"))
-            data_df = pd.read_csv(stringio)
-            
-            st.dataframe(data_df.head(), use_container_width=True)
-            st.success(f"Veiksmīgi ielādēti {len(data_df)} ieraksti.")
+            # Basic validation/cleaning (Dropping ID if present, just like in training)
+            if 'Booking_ID' in data_df.columns:
+                # Keep ID for results, but drop for prediction input
+                ids = data_df['Booking_ID']
+                X_input = data_df.drop(['Booking_ID', 'booking_status'], axis=1, errors='ignore')
+            else:
+                ids = data_df.index
+                X_input = data_df.drop(['booking_status'], axis=1, errors='ignore')
 
-            # 3. Preprocess the Data
-            st.subheader("3. Datu sagatavošana")
-            preprocessed_df = preprocess_data(data_df)
-            
-            st.dataframe(preprocessed_df.head(), use_container_width=True)
-            st.success("Datu sagatavošana pabeigta.")
-            
-            # 4. Load the Model
-            st.subheader("4. Aizdevuma statusu prognozēšana")
-            
-            # Load the model (cached)
+            st.dataframe(data_df.head(), use_container_width=True)
+            st.success(f"Successfully loaded {len(data_df)} records.")
+
+            # 3. Load Model
             model = load_mlflow_model()
             
-            if model is not None:
-                st.info("Prognozējam vērtības...")
-                
-                # 5. Predict target feature values
-                predictions = model.predict(preprocessed_df)
-                
-                # 6. Prepare and Display Results
-                results_df = pd.DataFrame({
-                    "Record Index": data_df.Loan_ID,
-                    "Forecasted Value": predictions
-                })
-                
-                st.subheader("5. Rezultāti")
-                st.dataframe(results_df, use_container_width=True)
-                st.success("Prognozēšana pabeigta un rezultāti parādīti!")
-                
+            if model:
+                # 4. Predict
+                if st.button("Predict Cancellation Status"):
+                    st.subheader("3. Prediction Results")
+                    
+                    with st.spinner("Predicting..."):
+                        # The pipeline handles all OneHotEncoding and Scaling internally
+                        try:
+                            predictions = model.predict(X_input)
+                            
+                            # Map numeric predictions back to labels if needed
+                            # Assuming 0 = Canceled, 1 = Not_Canceled based on LabelEncoder default sort
+                            # However, usually business logic is 1 = Event (Cancel). 
+                            # Let's map based on standard alpha sort: Canceled (0), Not_Canceled (1)
+                            # Wait! LabelEncoder sorts alphabetically:
+                            # 0: Canceled, 1: Not_Canceled
+                            
+                            prediction_labels = ["Canceled" if p == 0 else "Not_Canceled" for p in predictions]
+
+                            results_df = pd.DataFrame({
+                                "Booking ID": ids,
+                                "Predicted Status": prediction_labels,
+                                "Raw Prediction": predictions
+                            })
+                            
+                            # Highlight cancellations
+                            def highlight_cancel(val):
+                                color = 'red' if val == 'Canceled' else 'green'
+                                return f'color: {color}'
+
+                            st.dataframe(
+                                results_df.style.applymap(highlight_cancel, subset=['Predicted Status']),
+                                use_container_width=True
+                            )
+                            
+                            # Summary Metrics
+                            cancel_count = results_df[results_df['Predicted Status'] == 'Canceled'].shape[0]
+                            st.metric(label="Total Predicted Cancellations", value=cancel_count)
+                            
+                            # Download results
+                            csv = results_df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                "Download Results CSV",
+                                csv,
+                                "predictions.csv",
+                                "text/csv",
+                                key='download-csv'
+                            )
+                            
+                        except Exception as e:
+                            st.error(f"Prediction failed. Error: {e}")
+                            st.error("Ensure the CSV columns match the training data features.")
+                            st.write("Expected columns:", list(model.feature_names_in_) if hasattr(model, 'feature_names_in_') else "Unknown")
+
         except Exception as e:
-            st.error(f"An error occurred during processing: {e}")
-            st.warning("Please ensure your CSV file is correctly formatted and contains the expected features for the ML model.")
+            st.error(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()
-

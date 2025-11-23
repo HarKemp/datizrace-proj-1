@@ -1,142 +1,342 @@
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from matplotlib import pyplot as plt
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn import metrics
-import mlflow
+import matplotlib.pyplot as plt
+import seaborn as sns
 import os
 import warnings
-warnings.filterwarnings("ignore")  
+import mlflow
+import mlflow.sklearn
+from mlflow.tracking import MlflowClient
 
-experiment_name = 'Aizdevumu novērtēšana'  # Eksperimenta nosaukums, kurā tiks glabāti mūsu palaidieni (RUN)
+# Sklearn imports
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder, RobustScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, classification_report, confusion_matrix, roc_curve, auc
+from sklearn.base import BaseEstimator, TransformerMixin
 
-# Ielādējam datu kopu
-dirname = os.path.dirname(__file__)
-filename = os.path.join(dirname, 'data/train.csv')
-dataset = pd.read_csv(filename)
-# Nosakam skaitliskās kolonnas
-numerical_cols = dataset.select_dtypes(include=['int64','float64']).columns.tolist()
-# Nosakam kategoriju kolonnas
-categorical_cols = dataset.select_dtypes(include=['object']).columns.tolist()
-# Izņemsim kolonnas, kuras mūs neinteresē
-categorical_cols.remove('Loan_Status')
-categorical_cols.remove('Loan_ID')
+# Models
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
 
-# Ar modu aizpildam tukšas vērtības kategoriju kolonnās
-for col in categorical_cols:
-    dataset[col] = dataset[col].fillna(dataset[col].mode()[0])
+# CONFIG
+warnings.filterwarnings("ignore")
+MLFLOW_TRACKING_URI = "http://172.16.238.23:5000"
+EXPERIMENT_NAME = "Hotel-Cancelation-Pred"
+RANDOM_SEED = 80085
 
-# Ar mediānu aizpildām tukšās vērtības skaitliskajās kolonnās
-for col in numerical_cols:
-    dataset[col] = dataset[col].fillna(dataset[col].median(skipna=True))
+# CLIPPER
+class QuantileClipper(BaseEstimator, TransformerMixin):
+    def __init__(self, lower_q=0.01, upper_q=0.99):
+        self.lower_q = lower_q
+        self.upper_q = upper_q
 
-# Pieņemot ka datu kopā var būt nepiederošie dati (Outliers),
-# atmetam vērtības, kas ir pirmajos 5% un pēdējos 5% pēc vērtības
-dataset[numerical_cols] = dataset[numerical_cols].apply(lambda x: x.clip(*x.quantile([0.05, 0.95])))
+    def fit(self, X, y=None):
+        X = np.asarray(X)
+        if X.shape[0] > 0:
+            self.lower_ = np.quantile(X, self.lower_q, axis=0)
+            self.upper_ = np.quantile(X, self.upper_q, axis=0)
+        else:
+            self.lower_ = 0
+            self.upper_ = 0
+        return self
 
-# Skaitlisko kolonnu normalizācija un kopējā ienakuma aprēķins
-dataset['LoanAmount'] = np.log(dataset['LoanAmount']).copy()
-dataset['TotalIncome'] = dataset['ApplicantIncome'] + dataset['CoapplicantIncome']
-dataset['TotalIncome'] = np.log(dataset['TotalIncome']).copy()
+    def transform(self, X):
+        X = np.asarray(X)
+        return np.clip(X, self.lower_, self.upper_)
 
-# Nevajadzīgo kolonnu nodzēšana
-dataset = dataset.drop(columns=['ApplicantIncome','CoapplicantIncome'])
+# SETUP MLFLOW
+def setup_mlflow():
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    existing_exp = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
+    if existing_exp is None:
+        try:
+            mlflow.create_experiment(EXPERIMENT_NAME)
+        except Exception as e:
+            print(f"Note: Experiment already existed or could not be created: {e}")
+    
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
-# Kategoriju atribūtu vērtību iekodēšana ar skaitļiem. Tiek pielietots LabelEncoder, kurš to dara automātiski.
-for col in categorical_cols:
+# PREPROCESS
+def load_and_preprocess_data():
+
+    possible_paths = [
+        'data/Hotel Reservations.csv',       # Ja palaiž uz docker
+        '../Data/Hotel Reservations.csv',    # Ja palaiž notebook
+    ]
+    
+    filename = next((p for p in possible_paths if os.path.exists(p)), None)
+    
+    if not filename:
+        raise FileNotFoundError(f"Could not find 'Hotel Reservations.csv'. Checked paths: {possible_paths}")
+    
+    df = pd.read_csv(filename)
+
+    # Definējam mērķa mainīgo (y)
+    # Nepieciešams prognozēt 'booking_status'
+    if 'Booking_ID' in df.columns:
+        df = df.drop(['Booking_ID'], axis=1)
+
+    # Definējam atribūtus (X)
+    # Dati, ko izmantosim prognozēšanai.
+    # Izmetam 'Booking_ID', jo tas ir tikai identifikators un nav noderīgs prognozēšanai.
+    # Izmetam pašu 'booking_status', jo tas ir mūsu mērķia atribūts.
+    X = df.drop(['booking_status'], axis=1)
+    y = df['booking_status']
+
+    # Canceled / Not_Canceled -> 0 / 1
     le = LabelEncoder()
-    dataset[col] = le.fit_transform(dataset[col])
-
-# Mērķā atribūta vērtību iekodēšana
-dataset['Loan_Status'] = le.fit_transform(dataset['Loan_Status'])
-
-# Datu kopas sadalīšana apmācības un testēšanas kopās.
-# Vispirms atdalam aprakstošus atribūtus un mērķā atribūtu
-X = dataset.drop(columns=['Loan_Status', 'Loan_ID'])
-y = dataset.Loan_Status
-RANDOM_SEED = 6
-# Tad sadalam apmācības un testēšanas kopās
-X_train, X_test, y_train, y_test = train_test_split(X,y, test_size =0.3, random_state = RANDOM_SEED)
-
-# Apmācām modeļus
-# Vispirms RandomForest
-rf = RandomForestClassifier(random_state=RANDOM_SEED)
-# Definējam parametrus, kuri tiks padoti modeļa apmācības laikā, un norādām vērtības, kuras mēs vēlamies pārbaudīt.
-# Apmācības laikā notiks visu norādīto parametru vērtību kombinācijas.
-# Parametru nosaukumiem ir jābūt tādiem pašiem, kā norādīts algoritma API aprakstā.
-param_grid_forest = {
-    'n_estimators': [25,50],
-    'max_depth': [10,20]
-}
-
-# Izveidojam objektu parametru kombināciju novērtēšanai
-grid_forest = GridSearchCV(
-        estimator=rf,
-        param_grid=param_grid_forest, 
-        cv=5, 
-        n_jobs=-1, 
-        scoring='accuracy',
-        verbose=0
+    y_encoded = le.fit_transform(y)
+    
+    # Datu sadalīšana
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_encoded, test_size=0.3, 
+        random_state=RANDOM_SEED, 
+        stratify=y_encoded
     )
-# Palaižam apmācības un novērtēsanas procesu
-model_forest = grid_forest.fit(X_train, y_train)
+    
+    return X_train, X_test, y_train, y_test, le
 
-# Pārbaudam vai mūsu eksperiments eksistē un ja ne, tad to izveidojam
-if mlflow.get_experiment_by_name(experiment_name) is None:
-    mlflow.create_experiment(experiment_name)
-mlflow.set_experiment(experiment_name)
+# PIPELINE
+def get_processing_pipeline():
+    # Skaitliskie atribūti, kuriem izmanto StandardScaler
+    numeric_features = [
+        'no_of_weekend_nights', 'no_of_week_nights', 'lead_time', 
+        'no_of_adults', 'no_of_children', 'no_of_special_requests', 
+        'no_of_previous_cancellations', 'no_of_previous_bookings_not_canceled'
+    ]
+    avg_price_feature = ['avg_price_per_room']
+    
+    # Kategoriskie atribūti, kuriem izmanto OneHotEncoder
+    categorical_features = [
+        'type_of_meal_plan', 'room_type_reserved', 'market_segment_type', 'arrival_month', 'arrival_year'
+    ]
+    
+    # Binārie atribūti, kuriem neizmanto nekādu pārveidošanu
+    passthrough_features = ['required_car_parking_space', 'repeated_guest']
 
-# Funkcija efektivitātes rādītāju (metriku) novērtēšanai un grafika izveidošanai
-def eval_metrics(actual, pred):
-    # Novērtējam metrikas
-    accuracy = metrics.accuracy_score(actual, pred)
-    f1 = metrics.f1_score(actual, pred, pos_label=1)
-    fpr, tpr, _ = metrics.roc_curve(actual, pred)
-    auc = metrics.auc(fpr, tpr)
-    # Izveidojam grafikus AUC attēlošanai
-    plt.figure(figsize=(8,8))   # Grafika izmērs collās
-    plt.plot(fpr, tpr, color='blue', label='ROC curve area = %0.2f'%auc)    # Žīmējam līniju
-    plt.plot([0,1],[0,1], 'r--')    # Novilkam diagonāles līniju
-    plt.xlim([-0.1, 1.1])       # Definējam X ass limīrtu nedaudz plašāk, lai grafiks izskatītos labāk
-    plt.ylim([-0.1, 1.1])       # Definējam Y ass limīrtu nedaudz plašāk, lai grafiks izskatītos labāk
-    plt.xlabel('False Positive Rate', size=14)  # X ass nosaukums
-    plt.ylabel('True Positive Rate', size=14)   # Y ass nosaukums
-    plt.legend(loc='lower right')   # Leģendas izveidošana un novietošana labajā apakšējā stūrī
-    # Saglabājam grafiku artifaktu mapē
-    os.makedirs("artifacts", exist_ok=True)
-    plt.savefig("artifacts/ROC_curve.png")
-    # Iznicinām grafika objektu, lai tur nekas vairs netiktu zīmēts
+    # Transformatoru piemērošana katrai grupai
+
+    # Skaitliskais transformators:
+    numeric_transformer = Pipeline(steps=[
+        ('scaler', RobustScaler())
+    ])
+
+    avg_price_transformer = Pipeline(steps=[
+        ('clip', QuantileClipper(0.1, 0.99)),
+        ('scaler', StandardScaler())
+    ])
+
+    # Kategoriskais transformators:
+    # handle_unknown='ignore' nodrošina, ka modelis neizmetīs kļūdu, 
+    # ja testēšanas datos parādīsies kategorija, kas nebija apmācības datos.
+    categorical_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
+
+    # Transformatoru apvienošana
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('price', avg_price_transformer, avg_price_feature),
+            ('cat', categorical_transformer, categorical_features),
+            ('pass', 'passthrough', passthrough_features)
+        ],
+        remainder='drop' #  Visas pārējās kolonnas (t.i., 'arrival_date') tiks atmestas
+    )
+    return preprocessor
+
+
+# MODEL PARAMETERS
+def get_models_and_params():
+    models = []
+
+    # Modelis 1: Loģistiskā Regresija
+    # class_weight='balanced' svarīgs, jo mērogs ir atšķirīgs un dati ir nelīdzsvaroti
+    lr = LogisticRegression(random_state=RANDOM_SEED, max_iter=1000, class_weight='balanced')
+    grid_lr = {
+        'model__C': [0.1, 1.0, 10],
+        'model__solver': ['liblinear', 'saga']
+    }
+    models.append(('Logistic_Regression', lr, grid_lr))
+
+    # Modelis 2: Lēmumu Koks
+    dt = DecisionTreeClassifier(random_state=RANDOM_SEED, class_weight='balanced')
+    grid_dt = {
+        'model__max_depth': [5, 10, 20, None],
+        'model__min_samples_leaf': [1, 2, 5]
+    }
+    models.append(('Decision_Tree', dt, grid_dt))
+
+    # Modelis 3: Gadījuma Mežs
+    rf = RandomForestClassifier(random_state=RANDOM_SEED, class_weight='balanced')
+    grid_rf = {
+        'model__n_estimators': [100, 150],
+        'model__max_depth': [10, 20],
+        'model__min_samples_leaf': [1, 3]
+    }
+    models.append(('Random_Forest', rf, grid_rf))
+
+    # Modelis 4: XGBoost
+    xgb_clf = xgb.XGBClassifier(random_state=RANDOM_SEED, eval_metric='logloss')
+    grid_xgb = {
+        'model__n_estimators': [100, 150],
+        'model__max_depth': [5, 10],
+        'model__learning_rate': [0.1, 0.2],
+    }
+    models.append(('XGBoost', xgb_clf, grid_xgb))
+
+    return models
+
+# GENERATE PLOTS
+def generate_plots(model, X_test, y_test, model_name):
+    from sklearn.metrics import roc_curve, auc, confusion_matrix
+
+    if not os.path.exists("artifacts"):
+        os.makedirs("artifacts")
+
+    # 1. ROC Curve
+    if hasattr(model, "predict_proba"):
+        y_probs = model.predict_proba(X_test)[:, 1]
+    else:
+        y_probs = model.predict(X_test)
+
+    fpr, tpr, _ = roc_curve(y_test, y_probs)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(f'ROC - {model_name}')
+    plt.legend(loc="lower right")
+    
+    roc_path = f"artifacts/{model_name}_ROC.png"
+    plt.savefig(roc_path)
     plt.close()
-    # Atgriežam metriku vērtības noteiktajā secībā
-    return(accuracy, f1, auc)
 
-# Funkcija eksperimentu informācijas ierakstīšanai žurnālā
-def mlflow_logging(model, X, y, name):
-    # Sākam palaidumu ar attiecīgo nosaukumu
-     with mlflow.start_run(run_name=name) as run:
-        # Fiksējam palaiduma numuru kā tag'u
-        run_id = run.info.run_id
-        mlflow.set_tag("run_id", str(run_id))    
-        # Prognozējam vērtības norādītajai (testēšanas) kopai
-        pred = model.predict(X)
-        # Aprēķinam metriku vērtības
-        (accuracy, f1, auc) = eval_metrics(y, pred)
-        # Fiksējam žurnālā labākus modeļa parametrus
-        mlflow.log_params(model.best_params_)
-        # Fiksējam žurnālā metriku vērtības
-        mlflow.log_metric("Mean CV score", model.best_score_)
-        mlflow.log_metric("Accuracy", accuracy)
-        mlflow.log_metric("f1-score", f1)
-        mlflow.log_metric("AUC", auc)
+    # 2. Confusion Matrix
+    y_pred = model.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred)
+    
+    plt.figure(figsize=(6,4))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Confusion Matrix - {model_name}')
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+    
+    cm_path = f"artifacts/{model_name}_CM.png"
+    plt.savefig(cm_path)
+    plt.close()
 
-        # Fiksējam artifaktu un modeli
-        mlflow.log_artifact("artifacts/ROC_curve.png", name)
-        mlflow.sklearn.log_model(model, 
-                                 name = name,
-                                 input_example=X.iloc[:2].to_dict(orient='records'))
+    return roc_path, cm_path, roc_auc
 
-# Palaižam modeļu testēšanu un fiksāciju žurnālā.
-mlflow_logging(model_forest, X_test, y_test, "RandomForestClassifier")
+# MAIN
+def main():
+    setup_mlflow()
+    print("Loading data")
+    X_train, X_test, y_train, y_test, label_encoder = load_and_preprocess_data()
+    
+    preprocessor = get_processing_pipeline()
+    
+    models = get_models_and_params()
+    
+    best_overall_model_name = None
+    best_overall_accuracy = 0
+    best_run_id = None
+    
+    print("=== Modeļu apmācība un hiperparametru pielāgošana ===")
+    
+    for name, model, param_grid in models:
+        print(f"\nUzsāk apmācību modelim: {name}")
+        
+        # Create full pipeline
+        pipeline = Pipeline(steps=[
+            ('preprocessor', preprocessor),
+            ('model', model)
+        ])
+        
+        # Grid Search
+        grid_search = GridSearchCV(
+            estimator=pipeline,
+            param_grid=param_grid,
+            cv=10,
+            n_jobs=-1,
+            scoring='f1_weighted',
+            verbose=0
+        )
+        
+        # Start MLflow Run
+        with mlflow.start_run(run_name=name) as run:
+            # Fit
+            grid_search.fit(X_train, y_train)
+            best_model = grid_search.best_estimator_
+            
+            # Predictions
+            y_pred = best_model.predict(X_test)
+            
+            # Metrics
+            accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred, average='weighted')
+            
+            # Plots
+            roc_path, cm_path, roc_auc = generate_plots(best_model, X_test, y_test, name)
+            
+            # Logging to MLflow
+            mlflow.set_tag("model_type", name)
+            mlflow.log_params(grid_search.best_params_)
+            mlflow.log_metric("accuracy", accuracy)
+            mlflow.log_metric("f1_weighted", f1)
+            mlflow.log_metric("roc_auc", roc_auc)
+            
+            mlflow.log_artifact(roc_path)
+            mlflow.log_artifact(cm_path)
+            
+            # Log Model (sklearn)
+            input_example = X_train.iloc[:5]
+            mlflow.sklearn.log_model(
+                best_model, 
+                "model",
+                input_example=input_example
+            )
+            
+            print(f"  - {name}: Accuracy={accuracy:.4f}, F1={f1:.4f}, AUC={roc_auc:.4f}")
+            
+            # Champion izvēles parametri
+            if accuracy > best_overall_accuracy:
+                best_overall_accuracy = accuracy
+                best_overall_model_name = name
+                best_run_id = run.info.run_id
 
+    print("\n" + "="*30)
+    print(f"CHAMPION MODEL: {best_overall_model_name} with Accuracy: {best_overall_accuracy:.4f}")
+    print("="*30)
+    
+    # Reģistrē champion modeli
+    if best_run_id:
+        model_uri = f"runs:/{best_run_id}/model"
+        registered_model_name = "Hotel_Cancellation_Model"
+        
+        try:
+            mv = mlflow.register_model(model_uri, registered_model_name)
+            
+            # Izveido alias
+            client = MlflowClient()
+            client.set_registered_model_alias(
+                name=registered_model_name,
+                alias="champion",
+                version=mv.version
+            )
+            print(f"Successfully registered model version {mv.version} as 'champion'.")
+            
+        except Exception as e:
+            print(f"Error registering model: {e}")
+
+if __name__ == "__main__":
+    main()
