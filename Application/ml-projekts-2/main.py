@@ -126,7 +126,7 @@ def get_processing_pipeline():
     ])
 
     avg_price_transformer = Pipeline(steps=[
-        ('clip', QuantileClipper(0.1, 0.99)),
+        ('clip', QuantileClipper(0.05, 0.99)),
         ('scaler', StandardScaler())
     ])
 

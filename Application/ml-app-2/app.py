@@ -30,7 +30,7 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
         return np.clip(X, self.lower_, self.upper_)
 
 # --- Configuration ---
-MLFLOW_TRACKING_URI = "https://mlflow.datiz.studijas.lat"
+MLFLOW_TRACKING_URI = "http://172.16.238.23:5000"
 MODEL_NAME = "Hotel_Cancellation_Model"
 MODEL_ALIAS = "champion"
 
@@ -67,13 +67,10 @@ def main():
 
     if uploaded_file is not None:
         try:
-            # 2. Load Data
             st.subheader("2. Data Preview")
             data_df = pd.read_csv(uploaded_file)
             
-            # Basic validation/cleaning (Dropping ID if present, just like in training)
             if 'Booking_ID' in data_df.columns:
-                # Keep ID for results, but drop for prediction input
                 ids = data_df['Booking_ID']
                 X_input = data_df.drop(['Booking_ID', 'booking_status'], axis=1, errors='ignore')
             else:
@@ -92,16 +89,8 @@ def main():
                     st.subheader("3. Prediction Results")
                     
                     with st.spinner("Predicting..."):
-                        # The pipeline handles all OneHotEncoding and Scaling internally
                         try:
                             predictions = model.predict(X_input)
-                            
-                            # Map numeric predictions back to labels if needed
-                            # Assuming 0 = Canceled, 1 = Not_Canceled based on LabelEncoder default sort
-                            # However, usually business logic is 1 = Event (Cancel). 
-                            # Let's map based on standard alpha sort: Canceled (0), Not_Canceled (1)
-                            # Wait! LabelEncoder sorts alphabetically:
-                            # 0: Canceled, 1: Not_Canceled
                             
                             prediction_labels = ["Canceled" if p == 0 else "Not_Canceled" for p in predictions]
 
@@ -111,7 +100,7 @@ def main():
                                 "Raw Prediction": predictions
                             })
                             
-                            # Highlight cancellations
+                            # Izcelt Canceled un Not_Canceled
                             def highlight_cancel(val):
                                 color = 'red' if val == 'Canceled' else 'green'
                                 return f'color: {color}'
@@ -121,11 +110,10 @@ def main():
                                 use_container_width=True
                             )
                             
-                            # Summary Metrics
                             cancel_count = results_df[results_df['Predicted Status'] == 'Canceled'].shape[0]
                             st.metric(label="Total Predicted Cancellations", value=cancel_count)
                             
-                            # Download results
+                            # Lejupielādēt csv ar rezultātiem
                             csv = results_df.to_csv(index=False).encode('utf-8')
                             st.download_button(
                                 "Download Results CSV",
