@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from io import StringIO
 import os
-
 import mlflow.sklearn
 import pandas as pd
 import streamlit as st

@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 
 import os
 import warnings
+warnings.filterwarnings("ignore")
 
 import matplotlib.pyplot as plt
 import mlflow
@@ -19,9 +20,6 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve
 from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, RobustScaler
-
-
-warnings.filterwarnings("ignore")
 
 dirname = os.path.dirname(__file__)
 DATA_PATH = os.path.join(dirname, "data", "smoking_driking_dataset_Ver01.csv")
