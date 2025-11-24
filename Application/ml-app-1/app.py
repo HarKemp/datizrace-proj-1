@@ -36,7 +36,7 @@ EXPECTED_COLUMNS = [
     "DRK_YN",
 ]
 
-st.set_page_config(page_title="Drinking Classification", layout="centered")
+st.set_page_config(page_title="Drinking classification", layout="centered")
 
 
 def preprocess_input(df: pd.DataFrame) -> pd.DataFrame:
