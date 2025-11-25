@@ -47,7 +47,7 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
         return np.clip(X_np, self.lower_bounds_, self.upper_bounds_)
 
 def load_dataset() -> pd.DataFrame:
-    # Nolasa CSV un uzreiz pārvērš kategorijas par stringiem (jo MLflow nepatīk object)
+    # Nolasa CSV un pārvērš object un float kolonnas par stringiem, lai viss pipeline darbojas kā kategorijas (ar object ir problēmas)
     df = pd.read_csv(DATA_PATH)
     df[TARGET] = df[TARGET].astype(str)
     df["SMK_stat_type_cd"] = df["SMK_stat_type_cd"].astype(int).astype(str)
@@ -60,7 +60,7 @@ def load_dataset() -> pd.DataFrame:
 
 
 def split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    # 70/30 sadalījums 
+    # 70/30 sadalījums pēc DRK_YN
     X = df.drop(columns=[TARGET])
     y = df[TARGET]
     return train_test_split(
@@ -73,7 +73,7 @@ def split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series,
 
 
 def build_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
-    # ColumnTransformer veidošana ar atsevišķiem pipeline skaitliskiem/log un kategoriskiem datiem
+    # ColumnTransformer veidošana ar atsevisķiem pipeline parastiem skaitliskiem, log-transformētiem un kategoriskiem
     numeric_cols = [
         col
         for col in X_train.select_dtypes(include=["int64", "float64"]).columns
@@ -131,7 +131,7 @@ MODELS: Dict[str, Tuple[BaseEstimator, Dict[str, List]]] = {
 
 
 def ensure_experiment() -> None:
-    # Pārliecinās, ka MLflow eksperiments eksistē un ir aktīvs
+    # Pārliecinās, ka MLflow eksperiments eksistē un to aktivizē
     if mlflow.get_experiment_by_name(EXPERIMENT_NAME) is None:
         mlflow.create_experiment(EXPERIMENT_NAME)
     mlflow.set_experiment(EXPERIMENT_NAME)
@@ -147,7 +147,7 @@ def log_run(
     y_proba: np.ndarray,
 ) -> str:
     y_true_bin = (y_true == "Y").astype(int)
-    # ROC un CM zīmēšana saglabājas artifacts mapē
+    # ROC un CM zīmējumi glabājas artifacts mapē
     fpr, tpr, _ = roc_curve(y_true_bin, y_proba)
     plt.figure(figsize=(8, 8))
     plt.plot(fpr, tpr, color="blue", label=f"ROC AUC = {metrics_dict['roc_auc']:.3f}")
@@ -198,7 +198,7 @@ def log_run(
 
 
 def main() -> None:
-    # Pilnais treniņa scenārijs: sagatavošana, treniņš, logi un champion reģistrācija
+    # Pilnais treniņa scenārijs: sagatavošana, modeļi, MLflow logi, champion reģistrācija
     df = load_dataset()
     X_train, X_test, y_train, y_test = split_data(df)
     preprocessor = build_preprocessor(X_train)
