@@ -77,12 +77,9 @@ def load_model():
 def main():
     st.title("Alkohola lietošanas statusa prognoze")
     st.subheader("Upload Drinking Data")
-    st.markdown(
-        "Augšupielādējiet CSV ar visām kolonnām"
-        "Modelis tiek ielādēts no MLflow ar `champion` aliasu"
-    )
+    st.markdown("Augšupielādējiet CSV ar visām kolonnām")
 
-    uploaded_file = st.file_uploader("1.: augšupielādējiet CSV", type="csv")
+    uploaded_file = st.file_uploader("1: augšupielādējiet CSV", type="csv")
     if not uploaded_file:
         st.info("Izvēlieties datni, lai turpinātu")
         return
@@ -94,7 +91,7 @@ def main():
         st.error(f"Neizdevās nolasīt CSV: {exc}")
         return
 
-    st.subheader("2.: datu priekšskatījums")
+    st.subheader("2: datu priekšskatījums")
     st.dataframe(data_df.head(), use_container_width=True)
     st.caption(f"Kopā {len(data_df)} ieraksti.")
 
@@ -106,7 +103,7 @@ def main():
 
     model = load_model()
 
-    if st.button("3.: prognozēšana"):
+    if st.button("3: prognozēšana"):
         # Prognožu solis ar rezultātu parādīšanu
         with st.spinner("Prognozē..."):
             try:
@@ -115,14 +112,8 @@ def main():
                 results_df = pd.DataFrame(
                     {"Ieraksta indekss": indices, "Prognozētais DRK_YN": predictions}
                 )
-                st.subheader("4.: rezultāti")
-                st.dataframe(
-                    results_df.style.applymap(
-                        lambda val: "color: green" if val == "Y" else "color: red",
-                        subset=["Prognozētais DRK_YN"],
-                    ),
-                    use_container_width=True,
-                )
+                st.subheader("4: rezultāti")
+                st.dataframe(results_df, use_container_width=True)
 
                 counts = results_df["Prognozētais DRK_YN"].value_counts()
                 col1, col2 = st.columns(2)
