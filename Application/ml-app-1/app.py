@@ -45,10 +45,12 @@ def preprocess_input(df: pd.DataFrame) -> pd.DataFrame:
     if missing_cols:
         raise ValueError(f"Trūkst kolonnas: {missing_cols}")
 
-    dataset["SMK_stat_type_cd"] = dataset["SMK_stat_type_cd"].astype(int).astype(object)
-    dataset["urine_protein"] = dataset["urine_protein"].astype(int).astype(object)
-    dataset["hear_left"] = dataset["hear_left"].astype(int).astype(object)
-    dataset["hear_right"] = dataset["hear_right"].astype(int).astype(object)
+    dataset[TARGET] = dataset[TARGET].astype(str)
+    dataset["SMK_stat_type_cd"] = dataset["SMK_stat_type_cd"].astype(int).astype(str)
+    dataset["urine_protein"] = dataset["urine_protein"].astype(int).astype(str)
+    dataset["hear_left"] = dataset["hear_left"].astype(int).astype(str)
+    dataset["hear_right"] = dataset["hear_right"].astype(int).astype(str)
+    dataset["sex"] = dataset["sex"].astype(str)
     return dataset
 
 

@@ -3,22 +3,25 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import os
 import warnings
-warnings.filterwarnings("ignore")
-
+from mlflow.tracking import MlflowClient
 import matplotlib.pyplot as plt
+import seaborn as sns
 import mlflow
 import numpy as np
 import pandas as pd
+
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
 from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, RobustScaler
 
+warnings.filterwarnings("ignore")
+os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
 dirname = os.path.dirname(__file__)
 DATA_PATH = os.path.join(dirname, "data", "smoking_driking_dataset_Ver01.csv")
 TARGET = "DRK_YN"
@@ -28,6 +31,7 @@ TEST_SIZE = 0.30
 RANDOM_STATE = 42
 
 class QuantileClipper(BaseEstimator, TransformerMixin):
+    # Outlier clipping
     def __init__(self, lower: float = 0.005, upper: float = 0.995):
         self.lower = lower
         self.upper = upper
@@ -43,15 +47,20 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
         return np.clip(X_np, self.lower_bounds_, self.upper_bounds_)
 
 def load_dataset() -> pd.DataFrame:
+    # Nolasa CSV un uzreiz pārvērš kategorijas par stringiem (jo MLflow nepatīk object)
     df = pd.read_csv(DATA_PATH)
-    df["SMK_stat_type_cd"] = df["SMK_stat_type_cd"].astype(int).astype(object)
-    df["urine_protein"] = df["urine_protein"].astype(int).astype(object)
-    df["hear_left"] = df["hear_left"].astype(int).astype(object)
-    df["hear_right"] = df["hear_right"].astype(int).astype(object)
+    df[TARGET] = df[TARGET].astype(str)
+    df["SMK_stat_type_cd"] = df["SMK_stat_type_cd"].astype(int).astype(str)
+    df["urine_protein"] = df["urine_protein"].astype(int).astype(str)
+    df["hear_left"] = df["hear_left"].astype(int).astype(str)
+    df["hear_right"] = df["hear_right"].astype(int).astype(str)
+    df["sex"] = df["sex"].astype(str)
+
     return df
 
 
 def split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    # 70/30 sadalījums 
     X = df.drop(columns=[TARGET])
     y = df[TARGET]
     return train_test_split(
@@ -64,6 +73,7 @@ def split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series,
 
 
 def build_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
+    # ColumnTransformer veidošana ar atsevišķiem pipeline skaitliskiem/log un kategoriskiem datiem
     numeric_cols = [
         col
         for col in X_train.select_dtypes(include=["int64", "float64"]).columns
@@ -104,9 +114,10 @@ def build_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
 
 
 MODELS: Dict[str, Tuple[BaseEstimator, Dict[str, List]]] = {
+    # Katram modelim glabā estimatoru un tā GridSearch parametrus
     "logreg": (
         LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE),
-        {"model__C": [0.1, 1.0]},
+        {"model__C": [0.1, 1.0], "model__solver": ["lbfgs", "liblinear"]},
     ),
     "rf": (
         RandomForestClassifier(random_state=RANDOM_STATE),
@@ -120,6 +131,7 @@ MODELS: Dict[str, Tuple[BaseEstimator, Dict[str, List]]] = {
 
 
 def ensure_experiment() -> None:
+    # Pārliecinās, ka MLflow eksperiments eksistē un ir aktīvs
     if mlflow.get_experiment_by_name(EXPERIMENT_NAME) is None:
         mlflow.create_experiment(EXPERIMENT_NAME)
     mlflow.set_experiment(EXPERIMENT_NAME)
@@ -131,9 +143,12 @@ def log_run(
     metrics_dict: Dict[str, float],
     X_train: pd.DataFrame,
     y_true: pd.Series,
+    y_pred: np.ndarray,
     y_proba: np.ndarray,
 ) -> str:
-    fpr, tpr, _ = roc_curve((y_true == "Y").astype(int), y_proba)
+    y_true_bin = (y_true == "Y").astype(int)
+    # ROC un CM zīmēšana saglabājas artifacts mapē
+    fpr, tpr, _ = roc_curve(y_true_bin, y_proba)
     plt.figure(figsize=(8, 8))
     plt.plot(fpr, tpr, color="blue", label=f"ROC AUC = {metrics_dict['roc_auc']:.3f}")
     plt.plot([0, 1], [0, 1], "r--")
@@ -148,20 +163,42 @@ def log_run(
     plt.savefig(roc_path)
     plt.close()
 
+    cm = confusion_matrix(y_true_bin, (y_pred == "Y").astype(int), labels=[0, 1])
+    plt.figure(figsize=(4, 4))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        cbar=False,
+        xticklabels=["N", "Y"],
+        yticklabels=["N", "Y"],
+    )
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title(f"Confusion Matrix - {name}")
+    cm_path = artifacts_dir / f"cm_{name}.png"
+    plt.tight_layout()
+    plt.savefig(cm_path)
+    plt.close()
+
     with mlflow.start_run(run_name=f"drk-{name}") as run:
         mlflow.log_params(grid.best_params_)
         mlflow.log_metrics(metrics_dict)
         mlflow.log_artifact(str(roc_path))
+        mlflow.log_artifact(str(cm_path))
+        input_example = X_train.iloc[:2].copy()
         mlflow.sklearn.log_model(
             grid.best_estimator_,
-            artifact_path="model",
-            input_example=X_train.iloc[:2],
+            name="model",
+            input_example=input_example,
         )
         mlflow.set_tag("model_name", name)
         return run.info.run_id
 
 
 def main() -> None:
+    # Pilnais treniņa scenārijs: sagatavošana, treniņš, logi un champion reģistrācija
     df = load_dataset()
     X_train, X_test, y_train, y_test = split_data(df)
     preprocessor = build_preprocessor(X_train)
@@ -173,7 +210,7 @@ def main() -> None:
         grid = GridSearchCV(
             pipeline,
             param_grid=param_grid,
-            cv=5,
+            cv=3,
             scoring="accuracy",
             n_jobs=-1,
         )
@@ -185,7 +222,7 @@ def main() -> None:
             "f1": f1_score(y_test, y_pred, pos_label="Y"),
             "roc_auc": roc_auc_score((y_test == "Y").astype(int), y_proba),
         }
-        run_id = log_run(name, grid, metrics_dict, X_train, y_test, y_proba)
+        run_id = log_run(name, grid, metrics_dict, X_train, y_test, y_pred, y_proba)
         run_records.append((name, metrics_dict["accuracy"], run_id))
         print(f"{name} -> {metrics_dict}")
 
@@ -193,7 +230,12 @@ def main() -> None:
     print(f"Champion model: {best_name}")
     model_uri = f"runs:/{best_run_id}/model"
     registered = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
-    mlflow.set_registered_model_alias(REGISTERED_MODEL_NAME, "champion", registered.version)
+    client = MlflowClient()
+    client.set_registered_model_alias(
+        REGISTERED_MODEL_NAME,
+        "champion",
+        registered.version,
+    )
 
 
 if __name__ == "__main__":
