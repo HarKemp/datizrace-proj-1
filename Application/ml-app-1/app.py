@@ -79,7 +79,7 @@ def main():
     st.subheader("Upload Drinking Data")
     st.markdown("Augšupielādējiet CSV ar visām kolonnām")
 
-    uploaded_file = st.file_uploader("1: augšupielādējiet CSV", type="csv")
+    uploaded_file = st.file_uploader("1: Augšupielādējiet CSV", type="csv")
     if not uploaded_file:
         st.info("Izvēlieties datni, lai turpinātu")
         return
@@ -91,9 +91,9 @@ def main():
         st.error(f"Neizdevās nolasīt CSV: {exc}")
         return
 
-    st.subheader("2: datu priekšskatījums")
+    st.subheader("2: Datu priekšskatījums")
     st.dataframe(data_df.head(), use_container_width=True)
-    st.caption(f"Kopā {len(data_df)} ieraksti.")
+    st.caption(f"Kopā {len(data_df)} ieraksti")
 
     try:
         dataset, indices = prepare_dataset(data_df)
@@ -103,7 +103,7 @@ def main():
 
     model = load_model()
 
-    if st.button("3: prognozēšana"):
+    if st.button("3: Prognozēt"):
         # Prognožu solis ar rezultātu parādīšanu
         with st.spinner("Prognozē..."):
             try:
@@ -112,7 +112,7 @@ def main():
                 results_df = pd.DataFrame(
                     {"Ieraksta indekss": indices, "Prognozētais DRK_YN": predictions}
                 )
-                st.subheader("4: rezultāti")
+                st.subheader("4: Rezultāti")
                 st.dataframe(results_df, use_container_width=True)
 
                 counts = results_df["Prognozētais DRK_YN"].value_counts()
