@@ -1,142 +1,242 @@
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from matplotlib import pyplot as plt
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn import metrics
-import mlflow
+from __future__ import annotations
+from pathlib import Path
+from typing import Dict, List, Tuple
 import os
 import warnings
-warnings.filterwarnings("ignore")  
+from mlflow.tracking import MlflowClient
+import matplotlib.pyplot as plt
+import seaborn as sns
+import mlflow
+import numpy as np
+import pandas as pd
 
-experiment_name = 'Aizdevumu novērtēšana'  # Eksperimenta nosaukums, kurā tiks glabāti mūsu palaidieni (RUN)
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, RobustScaler
 
-# Ielādējam datu kopu
+warnings.filterwarnings("ignore")
+os.environ.setdefault("GIT_PYTHON_REFRESH", "quiet")
 dirname = os.path.dirname(__file__)
-filename = os.path.join(dirname, 'data/train.csv')
-dataset = pd.read_csv(filename)
-# Nosakam skaitliskās kolonnas
-numerical_cols = dataset.select_dtypes(include=['int64','float64']).columns.tolist()
-# Nosakam kategoriju kolonnas
-categorical_cols = dataset.select_dtypes(include=['object']).columns.tolist()
-# Izņemsim kolonnas, kuras mūs neinteresē
-categorical_cols.remove('Loan_Status')
-categorical_cols.remove('Loan_ID')
+DATA_PATH = os.path.join(dirname, "data", "smoking_driking_dataset_Ver01.csv")
+TARGET = "DRK_YN"
+EXPERIMENT_NAME = "Drinking Classification"
+REGISTERED_MODEL_NAME = "drk_classifier"
+TEST_SIZE = 0.30
+RANDOM_STATE = 42
 
-# Ar modu aizpildam tukšas vērtības kategoriju kolonnās
-for col in categorical_cols:
-    dataset[col] = dataset[col].fillna(dataset[col].mode()[0])
+class QuantileClipper(BaseEstimator, TransformerMixin):
+    # Outlier clipping
+    def __init__(self, lower: float = 0.005, upper: float = 0.995):
+        self.lower = lower
+        self.upper = upper
 
-# Ar mediānu aizpildām tukšās vērtības skaitliskajās kolonnās
-for col in numerical_cols:
-    dataset[col] = dataset[col].fillna(dataset[col].median(skipna=True))
+    def fit(self, X, y=None):
+        X_np = np.asarray(X, dtype=float)
+        self.lower_bounds_ = np.nanquantile(X_np, self.lower, axis=0)
+        self.upper_bounds_ = np.nanquantile(X_np, self.upper, axis=0)
+        return self
 
-# Pieņemot ka datu kopā var būt nepiederošie dati (Outliers),
-# atmetam vērtības, kas ir pirmajos 5% un pēdējos 5% pēc vērtības
-dataset[numerical_cols] = dataset[numerical_cols].apply(lambda x: x.clip(*x.quantile([0.05, 0.95])))
+    def transform(self, X):
+        X_np = np.asarray(X, dtype=float)
+        return np.clip(X_np, self.lower_bounds_, self.upper_bounds_)
 
-# Skaitlisko kolonnu normalizācija un kopējā ienakuma aprēķins
-dataset['LoanAmount'] = np.log(dataset['LoanAmount']).copy()
-dataset['TotalIncome'] = dataset['ApplicantIncome'] + dataset['CoapplicantIncome']
-dataset['TotalIncome'] = np.log(dataset['TotalIncome']).copy()
+def load_dataset() -> pd.DataFrame:
+    # Nolasa CSV un pārvērš object un float kolonnas par stringiem, lai viss pipeline darbojas kā kategorijas (ar object ir problēmas)
+    df = pd.read_csv(DATA_PATH)
+    df[TARGET] = df[TARGET].astype(str)
+    df["SMK_stat_type_cd"] = df["SMK_stat_type_cd"].astype(int).astype(str)
+    df["urine_protein"] = df["urine_protein"].astype(int).astype(str)
+    df["hear_left"] = df["hear_left"].astype(int).astype(str)
+    df["hear_right"] = df["hear_right"].astype(int).astype(str)
+    df["sex"] = df["sex"].astype(str)
 
-# Nevajadzīgo kolonnu nodzēšana
-dataset = dataset.drop(columns=['ApplicantIncome','CoapplicantIncome'])
+    return df
 
-# Kategoriju atribūtu vērtību iekodēšana ar skaitļiem. Tiek pielietots LabelEncoder, kurš to dara automātiski.
-for col in categorical_cols:
-    le = LabelEncoder()
-    dataset[col] = le.fit_transform(dataset[col])
 
-# Mērķā atribūta vērtību iekodēšana
-dataset['Loan_Status'] = le.fit_transform(dataset['Loan_Status'])
+def split_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    # 70/30 sadalījums pēc DRK_YN
+    X = df.drop(columns=[TARGET])
+    y = df[TARGET]
+    return train_test_split(
+        X,
+        y,
+        test_size=TEST_SIZE,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
 
-# Datu kopas sadalīšana apmācības un testēšanas kopās.
-# Vispirms atdalam aprakstošus atribūtus un mērķa atribūtu
-X = dataset.drop(columns=['Loan_Status', 'Loan_ID'])
-y = dataset.Loan_Status
-RANDOM_SEED = 6
-# Tad sadalam apmācības un testēšanas kopās
-X_train, X_test, y_train, y_test = train_test_split(X,y, test_size =0.3, random_state = RANDOM_SEED)
 
-# Apmācām modeļus
-# Vispirms RandomForest
-rf = RandomForestClassifier(random_state=RANDOM_SEED)
-# Definējam parametrus, kuri tiks padoti modeļa apmācības laikā, un norādām vērtības, kuras mēs vēlamies pārbaudīt.
-# Apmācības laikā notiks visu norādīto parametru vērtību kombinācijas.
-# Parametru nosaukumiem ir jābūt tādiem pašiem, kā norādīts algoritma API aprakstā.
-param_grid_forest = {
-    'n_estimators': [25,50],
-    'max_depth': [10,20]
+def build_preprocessor(X_train: pd.DataFrame) -> ColumnTransformer:
+    # ColumnTransformer veidošana ar atsevisķiem pipeline parastiem skaitliskiem, log-transformētiem un kategoriskiem
+    numeric_cols = [
+        col
+        for col in X_train.select_dtypes(include=["int64", "float64"]).columns
+        if col not in {"hear_left", "hear_right", "urine_protein", "SMK_stat_type_cd"}
+    ]
+    skewed_cols = ["triglyceride", "waistline", "HDL_chole", "LDL_chole", "SGOT_AST", "SGOT_ALT"]
+    pure_numeric = [col for col in numeric_cols if col not in skewed_cols]
+    categorical_cols = ["sex", "SMK_stat_type_cd", "urine_protein", "hear_left", "hear_right"]
+
+    numeric_pipeline = Pipeline(
+        steps=[
+            ("clip", QuantileClipper()),
+            ("scale", RobustScaler()),
+        ]
+    )
+
+    skew_pipeline = Pipeline(
+        steps=[
+            ("clip", QuantileClipper()),
+            ("log", FunctionTransformer(np.log1p, validate=False)),
+            ("scale", RobustScaler()),
+        ]
+    )
+
+    categorical_pipeline = Pipeline(
+        steps=[
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    return ColumnTransformer(
+        transformers=[
+            ("num", numeric_pipeline, pure_numeric),
+            ("skew", skew_pipeline, skewed_cols),
+            ("cat", categorical_pipeline, categorical_cols),
+        ]
+    )
+
+
+MODELS: Dict[str, Tuple[BaseEstimator, Dict[str, List]]] = {
+    # Katram modelim glabā estimatoru un tā GridSearch parametrus
+    "logreg": (
+        LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE),
+        {"model__C": [0.1, 1.0], "model__solver": ["lbfgs", "liblinear"]},
+    ),
+    "rf": (
+        RandomForestClassifier(random_state=RANDOM_STATE),
+        {"model__n_estimators": [200, 300], "model__max_depth": [15, 25]},
+    ),
+    "gb": (
+        GradientBoostingClassifier(random_state=RANDOM_STATE),
+        {"model__learning_rate": [0.05, 0.1], "model__n_estimators": [150, 250]},
+    ),
 }
 
-# Izveidojam objektu parametru kombināciju novērtēšanai
-grid_forest = GridSearchCV(
-        estimator=rf,
-        param_grid=param_grid_forest, 
-        cv=5, 
-        n_jobs=-1, 
-        scoring='accuracy',
-        verbose=0
-    )
-# Palaižam apmācības un novērtēšanas procesu
-model_forest = grid_forest.fit(X_train, y_train)
 
-# Pārbaudam vai mūsu eksperiments eksistē un ja ne, tad to izveidojam
-if mlflow.get_experiment_by_name(experiment_name) is None:
-    mlflow.create_experiment(experiment_name)
-mlflow.set_experiment(experiment_name)
+def ensure_experiment() -> None:
+    # Pārliecinās, ka MLflow eksperiments eksistē un to aktivizē
+    if mlflow.get_experiment_by_name(EXPERIMENT_NAME) is None:
+        mlflow.create_experiment(EXPERIMENT_NAME)
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
-# Funkcija efektivitātes rādītāju (metriku) novērtēšanai un grafika izveidošanai
-def eval_metrics(actual, pred):
-    # Novērtējam metrikas
-    accuracy = metrics.accuracy_score(actual, pred)
-    f1 = metrics.f1_score(actual, pred, pos_label=1)
-    fpr, tpr, _ = metrics.roc_curve(actual, pred)
-    auc = metrics.auc(fpr, tpr)
-    # Izveidojam grafikus AUC attēlošanai
-    plt.figure(figsize=(8,8))   # Grafika izmērs collās
-    plt.plot(fpr, tpr, color='blue', label='ROC curve area = %0.2f'%auc)    # Žīmējam līniju
-    plt.plot([0,1],[0,1], 'r--')    # Novilkam diagonāles līniju
-    plt.xlim([-0.1, 1.1])       # Definējam X ass limīrtu nedaudz plašāk, lai grafiks izskatītos labāk
-    plt.ylim([-0.1, 1.1])       # Definējam Y ass limīrtu nedaudz plašāk, lai grafiks izskatītos labāk
-    plt.xlabel('False Positive Rate', size=14)  # X ass nosaukums
-    plt.ylabel('True Positive Rate', size=14)   # Y ass nosaukums
-    plt.legend(loc='lower right')   # Leģendas izveidošana un novietošana labajā apakšējā stūrī
-    # Saglabājam grafiku artifaktu mapē
-    os.makedirs("artifacts", exist_ok=True)
-    plt.savefig("artifacts/ROC_curve.png")
-    # Iznicinām grafika objektu, lai tur nekas vairs netiktu zīmēts
+
+def log_run(
+    name: str,
+    grid: GridSearchCV,
+    metrics_dict: Dict[str, float],
+    X_train: pd.DataFrame,
+    y_true: pd.Series,
+    y_pred: np.ndarray,
+    y_proba: np.ndarray,
+) -> str:
+    y_true_bin = (y_true == "Y").astype(int)
+    # ROC un CM zīmējumi glabājas artifacts mapē
+    fpr, tpr, _ = roc_curve(y_true_bin, y_proba)
+    plt.figure(figsize=(8, 8))
+    plt.plot(fpr, tpr, color="blue", label=f"ROC AUC = {metrics_dict['roc_auc']:.3f}")
+    plt.plot([0, 1], [0, 1], "r--")
+    plt.xlim([-0.1, 1.1])
+    plt.ylim([-0.1, 1.1])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.legend(loc="lower right")
+    artifacts_dir = Path("artifacts")
+    artifacts_dir.mkdir(exist_ok=True)
+    roc_path = artifacts_dir / f"roc_{name}.png"
+    plt.savefig(roc_path)
     plt.close()
-    # Atgriežam metriku vērtības noteiktajā secībā
-    return(accuracy, f1, auc)
 
-# Funkcija eksperimentu informācijas ierakstīšanai žurnālā
-def mlflow_logging(model, X, y, name):
-    # Sākam palaidumu ar attiecīgo nosaukumu
-     with mlflow.start_run(run_name=name) as run:
-        # Fiksējam palaiduma numuru kā tag'u
-        run_id = run.info.run_id
-        mlflow.set_tag("run_id", str(run_id))    
-        # Prognozējam vērtības norādītajai (testēšanas) kopai
-        pred = model.predict(X)
-        # Aprēķinam metriku vērtības
-        (accuracy, f1, auc) = eval_metrics(y, pred)
-        # Fiksējam žurnālā labākos modeļa parametrus
-        mlflow.log_params(model.best_params_)
-        # Fiksējam žurnālā metriku vērtības
-        mlflow.log_metric("Mean CV score", model.best_score_)
-        mlflow.log_metric("Accuracy", accuracy)
-        mlflow.log_metric("f1-score", f1)
-        mlflow.log_metric("AUC", auc)
+    cm = confusion_matrix(y_true_bin, (y_pred == "Y").astype(int), labels=[0, 1])
+    plt.figure(figsize=(4, 4))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        cbar=False,
+        xticklabels=["N", "Y"],
+        yticklabels=["N", "Y"],
+    )
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title(f"Confusion Matrix - {name}")
+    cm_path = artifacts_dir / f"cm_{name}.png"
+    plt.tight_layout()
+    plt.savefig(cm_path)
+    plt.close()
 
-        # Fiksējam artifaktu un modeli
-        mlflow.log_artifact("artifacts/ROC_curve.png", name)
-        mlflow.sklearn.log_model(model, 
-                                 name = name,
-                                 input_example=X.iloc[:2].to_dict(orient='records'))
+    with mlflow.start_run(run_name=f"drk-{name}") as run:
+        mlflow.log_params(grid.best_params_)
+        mlflow.log_metrics(metrics_dict)
+        mlflow.log_artifact(str(roc_path))
+        mlflow.log_artifact(str(cm_path))
+        input_example = X_train.iloc[:2].copy()
+        mlflow.sklearn.log_model(
+            grid.best_estimator_,
+            name="model",
+            input_example=input_example,
+        )
+        mlflow.set_tag("model_name", name)
+        return run.info.run_id
 
-# Palaižam modeļu testēšanu un fiksāciju žurnālā.
-mlflow_logging(model_forest, X_test, y_test, "RandomForestClassifier")
 
+def main() -> None:
+    # Pilnais treniņa scenārijs: sagatavošana, modeļi, MLflow logi, champion reģistrācija
+    df = load_dataset()
+    X_train, X_test, y_train, y_test = split_data(df)
+    preprocessor = build_preprocessor(X_train)
+    ensure_experiment()
+
+    run_records = []
+    for name, (estimator, param_grid) in MODELS.items():
+        pipeline = Pipeline(steps=[("preprocess", preprocessor), ("model", estimator)])
+        grid = GridSearchCV(
+            pipeline,
+            param_grid=param_grid,
+            cv=3,
+            scoring="accuracy",
+            n_jobs=-1,
+        )
+        grid.fit(X_train, y_train)
+        y_pred = grid.predict(X_test)
+        y_proba = grid.predict_proba(X_test)[:, 1]
+        metrics_dict = {
+            "accuracy": accuracy_score(y_test, y_pred),
+            "f1": f1_score(y_test, y_pred, pos_label="Y"),
+            "roc_auc": roc_auc_score((y_test == "Y").astype(int), y_proba),
+        }
+        run_id = log_run(name, grid, metrics_dict, X_train, y_test, y_pred, y_proba)
+        run_records.append((name, metrics_dict["accuracy"], run_id))
+        print(f"{name} -> {metrics_dict}")
+
+    best_name, _, best_run_id = max(run_records, key=lambda item: item[1])
+    print(f"Champion model: {best_name}")
+    model_uri = f"runs:/{best_run_id}/model"
+    registered = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
+    client = MlflowClient()
+    client.set_registered_model_alias(
+        REGISTERED_MODEL_NAME,
+        "champion",
+        registered.version,
+    )
+
+
+if __name__ == "__main__":
+    main()
