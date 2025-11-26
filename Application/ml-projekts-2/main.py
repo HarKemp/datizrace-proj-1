@@ -20,7 +20,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
 
 # CONFIG
 warnings.filterwarnings("ignore")
@@ -112,7 +111,7 @@ def get_processing_pipeline():
     
     # Kategoriskie atribūti, kuriem izmanto OneHotEncoder
     categorical_features = [
-        'type_of_meal_plan', 'room_type_reserved', 'market_segment_type', 'arrival_month', 'arrival_year'
+        'type_of_meal_plan', 'room_type_reserved', 'market_segment_type', 'arrival_month',
     ]
     
     # Binārie atribūti, kuriem neizmanto nekādu pārveidošanu
@@ -126,7 +125,7 @@ def get_processing_pipeline():
     ])
 
     avg_price_transformer = Pipeline(steps=[
-        ('clip', QuantileClipper(0.05, 0.99)),
+        ('clip', QuantileClipper(0.1, 0.99)),
         ('scaler', StandardScaler())
     ])
 
@@ -179,15 +178,6 @@ def get_models_and_params():
         'model__min_samples_leaf': [1, 3]
     }
     models.append(('Random_Forest', rf, grid_rf))
-
-    # Modelis 4: XGBoost
-    xgb_clf = xgb.XGBClassifier(random_state=RANDOM_SEED, eval_metric='logloss')
-    grid_xgb = {
-        'model__n_estimators': [100, 150],
-        'model__max_depth': [5, 10],
-        'model__learning_rate': [0.1, 0.2],
-    }
-    models.append(('XGBoost', xgb_clf, grid_xgb))
 
     return models
 

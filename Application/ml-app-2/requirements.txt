@@ -3,6 +3,5 @@ pandas
 numpy
 scikit-learn
 mlflow
-xgboost
 matplotlib
 seaborn
